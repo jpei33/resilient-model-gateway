@@ -1,0 +1,692 @@
+<title>Gateway Build Runbook</title>
+<style>
+  :root{
+    --bg:#F1F3EF;
+    --surface:#FFFFFF;
+    --surface-2:#E8ECE4;
+    --border:#D7DCD0;
+    --text:#16201C;
+    --text-muted:#55635B;
+    --accent:#B8631F;
+    --accent-strong:#8F4B17;
+    --code-bg:#12161A;
+    --code-text:#DDE6DE;
+    --code-muted:#8FA096;
+    --tag-read:#3F6684;
+    --tag-run:#227A63;
+    --tag-fix:#A83D26;
+    --tag-build:#B8631F;
+    --tag-write:#6B5A99;
+    --shadow: 0 1px 2px rgba(20,25,20,0.06), 0 1px 1px rgba(20,25,20,0.04);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#10151A;
+      --surface:#181F24;
+      --surface-2:#1E262B;
+      --border:#2C363B;
+      --text:#E7ECE7;
+      --text-muted:#93A49B;
+      --accent:#E0954A;
+      --accent-strong:#F2AC66;
+      --code-bg:#0B0F12;
+      --code-text:#DCE6DD;
+      --code-muted:#7C8D84;
+      --tag-read:#7EA6C4;
+      --tag-run:#4FBE9C;
+      --tag-fix:#E17858;
+      --tag-build:#E0954A;
+      --tag-write:#A79AD6;
+      --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.25);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#10151A;
+    --surface:#181F24;
+    --surface-2:#1E262B;
+    --border:#2C363B;
+    --text:#E7ECE7;
+    --text-muted:#93A49B;
+    --accent:#E0954A;
+    --accent-strong:#F2AC66;
+    --code-bg:#0B0F12;
+    --code-text:#DCE6DD;
+    --code-muted:#7C8D84;
+    --tag-read:#7EA6C4;
+    --tag-run:#4FBE9C;
+    --tag-fix:#E17858;
+    --tag-build:#E0954A;
+    --tag-write:#A79AD6;
+    --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.25);
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:"IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+    line-height:1.55;
+  }
+  ::selection{ background:var(--accent); color:#fff; }
+
+  .wrap{ max-width:760px; margin:0 auto; padding:0 20px 96px; }
+
+  header.top{
+    padding:40px 0 20px;
+    border-bottom:1px solid var(--border);
+  }
+  .eyebrow{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:12.5px;
+    letter-spacing:.08em;
+    text-transform:uppercase;
+    color:var(--text-muted);
+    margin:0 0 10px;
+  }
+  h1{
+    font-size:clamp(28px,4vw,36px);
+    font-weight:700;
+    margin:0 0 8px;
+    letter-spacing:-.01em;
+    text-wrap:balance;
+  }
+  .sub{
+    color:var(--text-muted);
+    font-size:15.5px;
+    max-width:60ch;
+    margin:0 0 24px;
+  }
+
+  .progress-row{
+    display:flex; align-items:center; gap:14px;
+    margin-bottom:6px;
+  }
+  .progress-track{
+    flex:1; height:8px; border-radius:5px;
+    background:var(--surface-2);
+    border:1px solid var(--border);
+    overflow:hidden;
+  }
+  .progress-fill{
+    height:100%; width:0%;
+    background:linear-gradient(90deg, var(--tag-run), var(--accent));
+    transition:width .35s ease;
+  }
+  .progress-label{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:13px;
+    color:var(--text-muted);
+    white-space:nowrap;
+    font-variant-numeric:tabular-nums;
+  }
+
+  nav.phasenav{
+    display:flex; flex-wrap:wrap; gap:8px;
+    margin:20px 0 0;
+  }
+  nav.phasenav a{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:12px;
+    color:var(--text-muted);
+    text-decoration:none;
+    padding:5px 10px;
+    border:1px solid var(--border);
+    border-radius:6px;
+    background:var(--surface);
+    transition:border-color .15s ease, color .15s ease;
+  }
+  nav.phasenav a:hover, nav.phasenav a:focus-visible{
+    border-color:var(--accent);
+    color:var(--text);
+    outline:none;
+  }
+
+  section.phase{ margin-top:48px; scroll-margin-top:20px; }
+  .phase-head{
+    display:flex; align-items:baseline; gap:10px;
+    margin-bottom:6px;
+  }
+  .phase-num{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:13px;
+    color:var(--accent);
+    font-weight:600;
+  }
+  .phase-head h2{
+    font-size:19px; margin:0; font-weight:700; text-wrap:balance;
+  }
+  .phase-desc{
+    color:var(--text-muted);
+    font-size:14.5px;
+    margin:0 0 18px;
+    max-width:62ch;
+  }
+
+  .step{
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:10px;
+    padding:16px 18px 18px;
+    margin-bottom:12px;
+    box-shadow:var(--shadow);
+  }
+  .step.done{ opacity:.62; }
+  .step-head{
+    display:flex; align-items:flex-start; justify-content:space-between; gap:12px;
+  }
+  .step-left{ display:flex; align-items:flex-start; gap:12px; min-width:0; }
+
+  .toggle{
+    appearance:none; -webkit-appearance:none;
+    width:34px; height:20px; min-width:34px;
+    border-radius:999px;
+    border:1px solid var(--border);
+    background:var(--surface-2);
+    position:relative;
+    cursor:pointer;
+    margin-top:3px;
+    transition:background .15s ease, border-color .15s ease;
+  }
+  .toggle::after{
+    content:"";
+    position:absolute; top:2px; left:2px;
+    width:14px; height:14px; border-radius:50%;
+    background:var(--text-muted);
+    transition:transform .18s ease, background .18s ease;
+  }
+  .toggle:checked{
+    background:color-mix(in srgb, var(--tag-run) 25%, var(--surface-2));
+    border-color:var(--tag-run);
+  }
+  .toggle:checked::after{
+    transform:translateX(14px);
+    background:var(--tag-run);
+  }
+  .toggle:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+
+  .step-title-wrap{ min-width:0; }
+  .step-num{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:12px;
+    color:var(--text-muted);
+  }
+  .step h3{
+    font-size:16px; margin:2px 0 0; font-weight:600; text-wrap:balance;
+  }
+
+  .tag{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:11px;
+    font-weight:600;
+    letter-spacing:.04em;
+    padding:3px 8px;
+    border-radius:5px;
+    white-space:nowrap;
+    color:#fff;
+  }
+  .tag-read{ background:var(--tag-read); }
+  .tag-run{ background:var(--tag-run); }
+  .tag-fix{ background:var(--tag-fix); }
+  .tag-build{ background:var(--tag-build); }
+  .tag-write{ background:var(--tag-write); }
+
+  .step p{ margin:12px 0 0; font-size:14.5px; }
+  .step p.note{
+    color:var(--text-muted);
+    font-size:13.5px;
+    border-left:2px solid var(--border);
+    padding-left:10px;
+    margin-top:10px;
+  }
+  .step code.inline{
+    font-family:"IBM Plex Mono", monospace;
+    background:var(--surface-2);
+    padding:1px 5px;
+    border-radius:4px;
+    font-size:13px;
+  }
+
+  .codeblock{
+    margin-top:12px;
+    border-radius:8px;
+    overflow:hidden;
+    border:1px solid var(--border);
+  }
+  .codeblock-head{
+    display:flex; align-items:center; justify-content:space-between;
+    background:var(--surface-2);
+    padding:5px 10px;
+    font-family:"IBM Plex Mono", monospace;
+    font-size:11px;
+    color:var(--text-muted);
+    letter-spacing:.03em;
+    text-transform:uppercase;
+  }
+  .copy-btn{
+    font-family:"IBM Plex Mono", monospace;
+    font-size:11px;
+    background:none;
+    border:1px solid var(--border);
+    color:var(--text-muted);
+    padding:2px 8px;
+    border-radius:5px;
+    cursor:pointer;
+  }
+  .copy-btn:hover{ color:var(--text); border-color:var(--accent); }
+  .codeblock pre{
+    margin:0; padding:12px 14px;
+    background:var(--code-bg);
+    color:var(--code-text);
+    font-family:"IBM Plex Mono", monospace;
+    font-size:12.8px;
+    overflow-x:auto;
+    line-height:1.6;
+  }
+  .codeblock pre .c{ color:var(--code-muted); }
+
+  footer.end{
+    margin-top:56px;
+    padding-top:20px;
+    border-top:1px solid var(--border);
+    color:var(--text-muted);
+    font-size:13.5px;
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    .progress-fill, .toggle, .toggle::after{ transition:none; }
+  }
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<div class="wrap">
+
+  <header class="top">
+    <p class="eyebrow">Resilient Model Gateway &middot; capstone build sequence</p>
+    <h1>Gateway Build Runbook</h1>
+    <p class="sub">Twenty atomic steps — read, run, fix, or build — from confirming the naive baseline to a load-tested failover chart. Toggle a step once you've actually done it; commands are exact, copy-pasteable, and correct for your machine.</p>
+
+    <div class="progress-row">
+      <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+      <span class="progress-label" id="progressLabel">0 / 20</span>
+    </div>
+
+    <nav class="phasenav">
+      <a href="#phase-1">1&nbsp;Baseline</a>
+      <a href="#phase-2">2&nbsp;Breaker bug</a>
+      <a href="#phase-3">3&nbsp;Router</a>
+      <a href="#phase-4">4&nbsp;Tracing</a>
+      <a href="#phase-5">5&nbsp;Load test</a>
+      <a href="#phase-6">6&nbsp;Writeup</a>
+    </nav>
+  </header>
+
+  <!-- PHASE 1 -->
+  <section class="phase" id="phase-1">
+    <div class="phase-head"><span class="phase-num">PHASE 1</span><h2>Baseline — already written, verify it</h2></div>
+    <p class="phase-desc"><code class="inline">app/backends.py</code>, <code class="inline">app/main.py</code>, and the naive <code class="inline">app/router.py</code> are fully implemented. No code to write here — read them, run them, and be ready to defend them.</p>
+
+    <div class="step" data-step="1">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 1 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 01</span><h3>Read app/backends.py</h3></div>
+        </div>
+        <span class="tag tag-read">READ</span>
+      </div>
+      <p>Open <code class="inline">app/backends.py</code>. Note <code class="inline">SelfHostedBackend</code> (latency 0.03s, error_rate 0.15, cost $0.0002) vs <code class="inline">APIProviderBackend</code> (latency 0.12s, error_rate 0.03, cost $0.004) — and the <code class="inline">degraded</code> flag that forces a 0.95 error rate when flipped on.</p>
+      <p class="note">This asymmetry is the entire reason a fallback is worth building: a real self-hosted vLLM box behaves exactly like this — cheap and fast until it falls over under load — versus a paid API that's slower and pricier but steadier.</p>
+    </div>
+
+    <div class="step" data-step="2">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 2 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 02</span><h3>Read app/main.py</h3></div>
+        </div>
+        <span class="tag tag-read">READ</span>
+      </div>
+      <p>Note the four routes: <code class="inline">POST /gateway/generate</code>, <code class="inline">POST /admin/degrade/{name}</code>, <code class="inline">POST /admin/restore/{name}</code>, <code class="inline">GET /admin/status</code>. The degrade/restore pair is how you'll simulate an outage later without killing a process.</p>
+    </div>
+
+    <div class="step" data-step="3">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 3 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 03</span><h3>Start the server</h3></div>
+        </div>
+        <span class="tag tag-run">RUN</span>
+      </div>
+      <p>There's no <code class="inline">if __name__ == "__main__"</code> block in <code class="inline">app/main.py</code>, so <code class="inline">python main.py</code> won't do anything — <code class="inline">app</code> is a FastAPI object that a server has to host. Run it through uvicorn, from the repo root, in its own terminal window (leave it running):</p>
+      <div class="codeblock">
+        <div class="codeblock-head"><span>powershell / cmd / bash — identical</span><button class="copy-btn" onclick="copyCode('c3')">Copy</button></div>
+        <pre id="c3">cd resilient-model-gateway
+pip install -r requirements.txt
+uvicorn app.main:app --reload</pre>
+      </div>
+      <p class="note">Leave this running. Everything below hits it in a second terminal.</p>
+    </div>
+
+    <div class="step" data-step="4">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 4 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 04</span><h3>Call /gateway/generate and read the response</h3></div>
+        </div>
+        <span class="tag tag-run">RUN</span>
+      </div>
+      <p>It's a <code class="inline">POST</code> with a JSON body — not a path like <code class="inline">/gateway/generate/"question"</code>. FastAPI is validating the body against the <code class="inline">GenerateRequest</code> model, which only has a <code class="inline">prompt</code> field.</p>
+      <div class="codeblock">
+        <div class="codeblock-head"><span>PowerShell</span><button class="copy-btn" onclick="copyCode('c4a')">Copy</button></div>
+        <pre id="c4a">Invoke-RestMethod -Uri http://127.0.0.1:8000/gateway/generate -Method Post -ContentType "application/json" -Body '{"prompt": "what is the capital of France?"}'</pre>
+      </div>
+      <div class="codeblock">
+        <div class="codeblock-head"><span>bash / WSL / git-bash</span><button class="copy-btn" onclick="copyCode('c4b')">Copy</button></div>
+        <pre id="c4b">curl -X POST http://127.0.0.1:8000/gateway/generate -H "Content-Type: application/json" -d '{"prompt": "what is the capital of France?"}'</pre>
+      </div>
+      <p class="note">Skip the bash block above if you're in native PowerShell — <code class="inline">curl</code> there is aliased to <code class="inline">Invoke-WebRequest</code>, whose <code class="inline">-H</code>/<code class="inline">-d</code> flags don't exist and will throw a parameter-binding error. That's PowerShell intercepting the command, not a bug in the project. The PowerShell block above already does the same thing correctly.</p>
+      <p>You'll get back something like <code class="inline">{"answer": "[self_hosted] ok for: what is the capital...", "confidence": 0.83, "_served_by": "self_hosted", "_latency_ms": 41.2}</code> — remember, the backend is a mock, so the "answer" is a canned string, not a real completion. Run it 10 times in a row and count the failures:</p>
+      <div class="codeblock">
+        <div class="codeblock-head"><span>PowerShell — 10x</span><button class="copy-btn" onclick="copyCode('c4c')">Copy</button></div>
+        <pre id="c4c">1..10 | ForEach-Object { try { Invoke-RestMethod -Uri http://127.0.0.1:8000/gateway/generate -Method Post -ContentType "application/json" -Body '{"prompt": "ping"}' | Out-Null; "ok" } catch { "FAILED" } }</pre>
+      </div>
+      <p class="note">Expect roughly 1 in 7 to fail outright (503) — that's <code class="inline">self_hosted</code>'s 0.15 error_rate with zero retry logic yet. Now answer, out loud: why is confirming this naive, failure-prone baseline works <em>before</em> adding any resilience a meaningful checkpoint rather than a step you could skip? And once resilience exists, should <code class="inline">main.py</code>'s bare <code class="inline">except Exception: raise HTTPException(503, ...)</code> stay that broad, or does it need to distinguish "genuinely no backend available" from other failures?</p>
+    </div>
+  </section>
+
+  <!-- PHASE 2 -->
+  <section class="phase" id="phase-2">
+    <div class="phase-head"><span class="phase-num">PHASE 2</span><h2>The circuit breaker bug</h2></div>
+    <p class="phase-desc"><code class="inline">AsyncTokenBucket</code>, <code class="inline">retry_with_backoff</code>, and <code class="inline">parse_llm_json</code> in <code class="inline">app/resilience.py</code> are done. Only <code class="inline">CircuitBreaker.record_failure()</code> is broken. Prove the bug to yourself before you fix it.</p>
+
+    <div class="step" data-step="5">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 5 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 05</span><h3>Read the three working primitives</h3></div>
+        </div>
+        <span class="tag tag-read">READ</span>
+      </div>
+      <p>In <code class="inline">app/resilience.py</code>, read <code class="inline">AsyncTokenBucket</code> (lock-protected refill-then-acquire), <code class="inline">retry_with_backoff</code> (full jitter: <code class="inline">random.uniform(0, min(max_delay, base_delay * 2**attempt))</code>), and <code class="inline">parse_llm_json</code> (direct parse &rarr; strip fences &rarr; strip trailing commas &rarr; give up). You'll wrap these around backend calls in Phase 3 — don't reinvent them.</p>
+    </div>
+
+    <div class="step" data-step="6">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 6 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 06</span><h3>Write scripts/debug_breaker.py</h3></div>
+        </div>
+        <span class="tag tag-fix">FIX</span>
+      </div>
+      <p>Create a new scratch file <code class="inline">scripts/debug_breaker.py</code>. In it: import <code class="inline">CircuitBreaker</code> from <code class="inline">app.resilience</code>, instantiate <code class="inline">CircuitBreaker(failure_threshold=3, cooldown_seconds=1.0)</code>, call <code class="inline">.record_failure()</code> five times in a row, and after each call print the attempt number, <code class="inline">.state</code>, and <code class="inline">.failure_count</code>.</p>
+      <div class="codeblock">
+        <div class="codeblock-head"><span>run it</span><button class="copy-btn" onclick="copyCode('c6')">Copy</button></div>
+        <pre id="c6">python scripts/debug_breaker.py</pre>
+      </div>
+      <p class="note">Expected (correct) behavior: failure_count climbs 1, 2, 3 and state flips CLOSED&rarr;OPEN on the 3rd call. What you'll actually see: failure_count stuck at 0 forever, state never leaves CLOSED. That gap is the bug — go find the line responsible before reading Step 7.</p>
+    </div>
+
+    <div class="step" data-step="7">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 7 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 07</span><h3>Fix record_failure() in app/resilience.py</h3></div>
+        </div>
+        <span class="tag tag-fix">FIX</span>
+      </div>
+      <p>Inside <code class="inline">record_failure()</code>, the line <code class="inline">self.failure_count</code> on its own is a no-op expression — it reads the attribute and discards it, it never assigns anything. Change it to <code class="inline">self.failure_count += 1</code>.</p>
+    </div>
+
+    <div class="step" data-step="8">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 8 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 08</span><h3>Re-run debug_breaker.py to confirm the fix</h3></div>
+        </div>
+        <span class="tag tag-run">RUN</span>
+      </div>
+      <div class="codeblock">
+        <div class="codeblock-head"><span>run it again</span><button class="copy-btn" onclick="copyCode('c8')">Copy</button></div>
+        <pre id="c8">python scripts/debug_breaker.py</pre>
+      </div>
+      <p class="note">Confirm failure_count now climbs 1&rarr;2&rarr;3 and state prints <code class="inline">CircuitState.OPEN</code> starting on the 3rd call. Before this fix, the breaker could only ever open via a failed HALF_OPEN probe — never from a run of repeated failures, which is the exact scenario your Phase 5 load test is supposed to demonstrate.</p>
+    </div>
+  </section>
+
+  <!-- PHASE 3 -->
+  <section class="phase" id="phase-3">
+    <div class="phase-head"><span class="phase-num">PHASE 3</span><h2>Router upgrade — the centerpiece</h2></div>
+    <p class="phase-desc">The file's own docstring calls this "the most Sola-shaped thing you can be asked to sketch cold." Build the skeleton with me, then implement it yourself.</p>
+
+    <div class="step" data-step="9">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 9 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 09</span><h3>Build the upgraded generate() in app/router.py</h3></div>
+        </div>
+        <span class="tag tag-build">BUILD</span>
+      </div>
+      <p>Ask for a TODO-commented skeleton, not filled-in code. Implement, per backend, in order: rate-limit against its <code class="inline">AsyncTokenBucket</code>; check its <code class="inline">CircuitBreaker.allow_request()</code> (if OPEN, skip straight to fallback without attempting a call); wrap the actual backend call in <code class="inline">retry_with_backoff</code>; on success call <code class="inline">.record_success()</code> and return, tagged with which backend served it and how many retries fired; on exhausted retries call <code class="inline">.record_failure()</code> and fall through — don't re-raise until the fallback has also failed.</p>
+      <p class="note">Everything above must exist twice, independently, per backend — never a shared bucket or breaker. If one global breaker existed and the primary tripped it, the "healthy" fallback would get blocked too, which defeats the entire point of having a fallback.</p>
+    </div>
+
+    <div class="step" data-step="10">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 10 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 10</span><h3>Force-fail the primary and confirm fallback kicks in</h3></div>
+        </div>
+        <span class="tag tag-run">RUN</span>
+      </div>
+      <div class="codeblock">
+        <div class="codeblock-head"><span>PowerShell</span><button class="copy-btn" onclick="copyCode('c10')">Copy</button></div>
+        <pre id="c10">Invoke-RestMethod -Uri http://127.0.0.1:8000/admin/degrade/self_hosted -Method Post
+Invoke-RestMethod -Uri http://127.0.0.1:8000/gateway/generate -Method Post -ContentType "application/json" -Body '{"prompt": "test fallback"}'
+Invoke-RestMethod -Uri http://127.0.0.1:8000/admin/restore/self_hosted -Method Post</pre>
+      </div>
+      <p class="note">The middle call should still return 200, with <code class="inline">_served_by: "api_provider"</code>, even though self_hosted is fully degraded. If it 503s instead, your fallback path has a bug — check whether you're catching the retry-exhausted exception on primary before trying the fallback, not re-raising it immediately.</p>
+    </div>
+  </section>
+
+  <!-- PHASE 4 -->
+  <section class="phase" id="phase-4">
+    <div class="phase-head"><span class="phase-num">PHASE 4</span><h2>Observability — the tiny dashboard</h2></div>
+    <p class="phase-desc"><code class="inline">app/main.py</code> already wires <code class="inline">trace_store.summary_stats()</code> into <code class="inline">/admin/status</code>. You're building what feeds it.</p>
+
+    <div class="step" data-step="11">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 11 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 11</span><h3>Design GatewaySpan's fields</h3></div>
+        </div>
+        <span class="tag tag-read">READ</span>
+      </div>
+      <p>Open <code class="inline">app/tracing.py</code>. The dataclass is sketched but not required as-is. Before writing anything, answer: which fields let you reconstruct, after the fact, exactly when the breaker tripped and how the gateway responded at that moment? Why must <code class="inline">circuit_state</code> be captured <em>at request time</em> rather than read fresh later when you build the summary — what would you lose about "the breaker tripped mid-run" if you didn't?</p>
+    </div>
+
+    <div class="step" data-step="12">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 12 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 12</span><h3>Build TraceStore.record() and summary_stats()</h3></div>
+        </div>
+        <span class="tag tag-build">BUILD</span>
+      </div>
+      <p><code class="inline">record()</code> just appends to <code class="inline">self.spans</code>. <code class="inline">summary_stats()</code> is the real work: group spans by backend, and per backend return success rate, p50/p95 latency, current circuit state, and total cost. Design it with Phase 5's chart already in mind — it'll get called repeatedly over the course of a load test.</p>
+    </div>
+
+    <div class="step" data-step="13">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 13 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 13</span><h3>Verify /admin/status shows real numbers</h3></div>
+        </div>
+        <span class="tag tag-run">RUN</span>
+      </div>
+      <p>Fire a handful of <code class="inline">/gateway/generate</code> calls, then:</p>
+      <div class="codeblock">
+        <div class="codeblock-head"><span>PowerShell</span><button class="copy-btn" onclick="copyCode('c13')">Copy</button></div>
+        <pre id="c13">Invoke-RestMethod -Uri http://127.0.0.1:8000/admin/status -Method Get | ConvertTo-Json -Depth 5</pre>
+      </div>
+      <p class="note">Confirm <code class="inline">trace_summary</code> shows both backends with a success rate, p50/p95, circuit_state, and cost — not the <code class="inline">NotImplementedError</code> path silently swallowing it.</p>
+    </div>
+  </section>
+
+  <!-- PHASE 5 -->
+  <section class="phase" id="phase-5">
+    <div class="phase-head"><span class="phase-num">PHASE 5</span><h2>Load test &amp; the failover chart</h2></div>
+    <p class="phase-desc">The concurrency harness in <code class="inline">scripts/load_test.py</code> is already built. Failure injection and the chart are the actual Day 4 deliverable.</p>
+
+    <div class="step" data-step="14">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 14 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 14</span><h3>Read the concurrency harness</h3></div>
+        </div>
+        <span class="tag tag-read">READ</span>
+      </div>
+      <p>In <code class="inline">scripts/load_test.py</code>, read <code class="inline">fire_one()</code> and <code class="inline">main()</code>: a <code class="inline">asyncio.Semaphore(CONCURRENCY)</code> bounds how many requests are in flight at once, and each call's own try/except means one failed request can't crash <code class="inline">asyncio.gather()</code> for the whole batch.</p>
+    </div>
+
+    <div class="step" data-step="15">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 15 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 15</span><h3>Run the harness once, no failure injection yet</h3></div>
+        </div>
+        <span class="tag tag-run">RUN</span>
+      </div>
+      <div class="codeblock">
+        <div class="codeblock-head"><span>with the server still running</span><button class="copy-btn" onclick="copyCode('c15')">Copy</button></div>
+        <pre id="c15">python scripts/load_test.py</pre>
+      </div>
+      <p class="note">This is your new baseline: with the resilience stack now in place, success rate should sit much closer to 200/200 than the roughly 85% you saw hammering the raw endpoint in Step 4 — retries are quietly absorbing self_hosted's transient failures. Worth noting explicitly when you talk through this project later.</p>
+    </div>
+
+    <div class="step" data-step="16">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 16 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 16</span><h3>Add failure injection + status polling</h3></div>
+        </div>
+        <span class="tag tag-build">BUILD</span>
+      </div>
+      <p>Replace the single <code class="inline">gather()</code> call with logic that, partway through the run (tune <code class="inline">DEGRADE_AT_REQUEST</code> / <code class="inline">RESTORE_AT_REQUEST</code> for your machine), fires <code class="inline">POST /admin/degrade/self_hosted</code>, then later <code class="inline">POST /admin/restore/self_hosted</code>. Poll <code class="inline">GET /admin/status</code> at regular intervals throughout and store each snapshot with a timestamp — that time series is your chart's raw data.</p>
+    </div>
+
+    <div class="step" data-step="17">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 17 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 17</span><h3>Turn the results into a before/during/after chart</h3></div>
+        </div>
+        <span class="tag tag-build">BUILD</span>
+      </div>
+      <p>matplotlib isn't a dependency yet:</p>
+      <div class="codeblock">
+        <div class="codeblock-head"><span>add the dependency</span><button class="copy-btn" onclick="copyCode('c17')">Copy</button></div>
+        <pre id="c17">pip install matplotlib</pre>
+      </div>
+      <p>Plot latency and success rate over time (or over request index), with vertical lines or shaded regions marking the degrade and restore timestamps. This chart is the single artifact that proves — not claims — graceful degradation and recovery. It's also almost certainly what you'll be asked to walk through live.</p>
+    </div>
+  </section>
+
+  <!-- PHASE 6 -->
+  <section class="phase" id="phase-6">
+    <div class="phase-head"><span class="phase-num">PHASE 6</span><h2>Writeup &amp; interview rehearsal</h2></div>
+    <p class="phase-desc">Polish plus the part that actually gets rehearsed out loud.</p>
+
+    <div class="step" data-step="18">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 18 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 18</span><h3>Fill in docs/architecture.md's request-flow diagram</h3></div>
+        </div>
+        <span class="tag tag-write">WRITE</span>
+      </div>
+      <p>The file already sketches the shape in prose: client &rarr; gateway &rarr; [rate limiter &rarr; circuit breaker &rarr; retry &rarr; primary] &rarr; (on failure) &rarr; [rate limiter &rarr; circuit breaker &rarr; retry &rarr; fallback] &rarr; response, plus where tracing hooks in. Turn that into an actual diagram (ASCII is fine, or a Mermaid flowchart if your README renderer supports it).</p>
+    </div>
+
+    <div class="step" data-step="19">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 19 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 19</span><h3>Update README.md's status + write the postmortem</h3></div>
+        </div>
+        <span class="tag tag-write">WRITE</span>
+      </div>
+      <p>Flip README's "Status: Early" section to reflect what's actually built, and add a short "what broke, what I'd add with more time" section — real friction you hit (the breaker bug counts), plus 2-3 honest next steps (per-request-type routing, real backends instead of mocks, persistent trace storage).</p>
+    </div>
+
+    <div class="step" data-step="20">
+      <div class="step-head">
+        <div class="step-left">
+          <input type="checkbox" class="toggle" aria-label="Mark step 20 done">
+          <div class="step-title-wrap"><span class="step-num">STEP 20</span><h3>Rehearse the two questions baked into router.py</h3></div>
+        </div>
+        <span class="tag tag-write">WRITE</span>
+      </div>
+      <p>Write out, in your own words: (1) what's your total latency budget across primary retries plus fallback retries, and at what point does "try harder on primary" cost more than "just fall back sooner"? (2) how would you route by request type instead of always trying primary first — e.g. sending recovery-critical calls straight to the more reliable backend? You don't have to implement #2, but you should be able to talk through it cold.</p>
+    </div>
+  </section>
+
+  <footer class="end">
+    Built alongside the resilient-model-gateway walkthrough. Toggle progress is stored locally in this page only.
+  </footer>
+</div>
+
+<script>
+(function(){
+  var TOTAL = 20;
+  var KEY = "gateway-runbook-progress-v1";
+
+  function loadState(){
+    try{
+      var raw = localStorage.getItem(KEY);
+      return raw ? JSON.parse(raw) : {};
+    }catch(e){ return {}; }
+  }
+  function saveState(state){
+    try{ localStorage.setItem(KEY, JSON.stringify(state)); }catch(e){}
+  }
+
+  var state = loadState();
+  var toggles = document.querySelectorAll(".toggle");
+
+  function updateProgress(){
+    var done = 0;
+    toggles.forEach(function(t){ if (t.checked) done++; });
+    var pct = Math.round((done / TOTAL) * 100);
+    var fill = document.getElementById("progressFill");
+    var label = document.getElementById("progressLabel");
+    if (fill) fill.style.width = pct + "%";
+    if (label) label.textContent = done + " / " + TOTAL;
+  }
+
+  toggles.forEach(function(t){
+    var card = t.closest(".step");
+    var id = card ? card.getAttribute("data-step") : null;
+    if (id && state[id]) {
+      t.checked = true;
+      card.classList.add("done");
+    }
+    t.addEventListener("change", function(){
+      if (!id) return;
+      state[id] = t.checked;
+      saveState(state);
+      if (card) card.classList.toggle("done", t.checked);
+      updateProgress();
+    });
+  });
+
+  updateProgress();
+
+  window.copyCode = function(id){
+    var el = document.getElementById(id);
+    if (!el) return;
+    var text = el.textContent;
+    try{
+      navigator.clipboard.writeText(text).catch(function(){});
+    }catch(e){}
+  };
+})();
+</script>
