@@ -116,7 +116,7 @@ class CircuitBreaker:
         # from a run of repeated failures — the breaker can currently only
         # open via a failed HALF_OPEN probe. It should read:
         #     self.failure_count += 1
-        self.failure_count
+        self.failure_count +=1 
         if self.state == CircuitState.HALF_OPEN:
             self.state = CircuitState.OPEN
             self.opened_at = time.monotonic()

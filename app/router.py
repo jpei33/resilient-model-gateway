@@ -47,12 +47,30 @@ Follow-up questions to be ready for (from the cram sheet):
     straight to the more reliable backend)? You don't have to implement
     this, but you should be able to talk through it.
 """
+from ast import parse
 import time
 from typing import Any, Dict
 
 from app.backends import MockBackend
-from app.resilience import AsyncTokenBucket, CircuitBreaker, parse_llm_json  # noqa: F401 (bucket/breaker unused until Day 2)
+from app.resilience import (
+    AsyncTokenBucket,
+    CircuitBreaker,
+    NonRetryableAPIError,
+    ParseFailure,
+    RetryableAPIError,
+    parse_llm_json,
+    retry_with_backoff,
+)
 from app.tracing import TraceStore
+from dataclasses import dataclass
+
+@dataclass 
+class AttemptResult:
+  output: Dict[str, Any]
+  retries: int
+  circuit_state: str
+  latency_ms: float
+  cost_usd: float
 
 
 class ModelGateway:
@@ -77,11 +95,149 @@ class ModelGateway:
         self.fallback_breaker = CircuitBreaker(failure_threshold=failure_threshold, cooldown_seconds=cooldown_seconds)
 
     async def generate(self, prompt: str) -> Dict[str, Any]:
-        # --- Day 1 naive version — replace with the Day 2/3 shape from the
-        #     module docstring once this baseline is confirmed working. ---
+        """
+        TASK (Step 9 / Day 2) -- see the module docstring's TASK list above
+        for the full spec. This orchestrates two attempts (primary, then
+        fallback) via `_attempt_backend()` below, instead of duplicating
+        the rate-limit -> circuit-check -> retry -> parse sequence twice
+        inline. That sequence is exactly Day 21's ResilientLLMClient
+        pattern for ONE backend -- you already built and proved it works;
+        this router just reuses it twice with a fallback chain between the
+        two calls. Writing it once and calling it twice also means a fix
+        you make to the sequence can't accidentally apply to only one
+        backend.
+
+        Tracing (recording a GatewaySpan per attempt) is deliberately NOT
+        part of this step -- that's Phase 4 / Step 12 of the runbook, once
+        TraceStore.record() actually exists. Leave self.trace_store alone
+        for now.
+        """
         t0 = time.perf_counter()
-        raw = await self.primary.call(prompt)
-        result = parse_llm_json(raw)
-        result["_served_by"] = self.primary.name
-        result["_latency_ms"] = (time.perf_counter() - t0) * 1000
-        return result
+
+        primary_exc = None
+
+        try:
+          result = await self._attempt_backend(
+            self.primary, self.primary_bucket, self.primary_breaker, prompt
+          )
+          result["_served_by"] = self.primary.name
+          result["_latency_ms"] = (time.perf_counter() - t0)*1000
+          return result
+        except Exception as e:
+          primary_exc = e
+        
+        try:
+          result = await self._attempt_backend(
+            self.fallback, self.fallback_bucket, self.fallback_breaker, prompt
+          )
+          result["_served_by"] = self.fallback.name
+          result["_latency_ms"] = (time.perf_counter() - t0)*1000
+          return result
+        except Exception as fallback_exc:
+          raise RuntimeError(
+            f"both backends failed: primary={primary_exc}, fallback={fallback_exc}"
+          )
+
+
+        # TODO 1 -- try the primary via self._attempt_backend(...).
+        #   - On success: tag the returned dict with which backend served
+        #     it (`_served_by`), total elapsed latency (`_latency_ms`,
+        #     using t0 above), and how many retries fired. Return it.
+        #   - On failure: catch whatever _attempt_backend raises. Do NOT
+        #     re-raise yet -- fall through to TODO 2 instead.
+
+        # TODO 2 -- try the fallback the same way.
+        #   - On success: same tagging as above, but _served_by should
+        #     read self.fallback.name instead.
+        #   - On failure: nothing left to fall back to. Let it propagate
+        #     up to main.py's `except Exception` handler.
+
+        # raise NotImplementedError("TODO (Step 9): see comments above")
+
+    async def _attempt_backend(
+        self,
+        backend: MockBackend,
+        bucket: AsyncTokenBucket,
+        breaker: CircuitBreaker,
+        prompt: str,
+    ) -> Dict[str, Any]:
+        """
+        One resilient attempt against ONE backend: rate-limit ->
+        circuit-check -> retry -> parse. Called from generate() once for
+        primary, once for fallback -- this is the "write it once" piece
+        the docstring above is talking about.
+
+        TODO, in the order the module docstring's TASK list gives (1 then
+        2) -- but before you write it, decide for yourself whether that
+        order is actually right. Rate-limiting *before* checking whether
+        the circuit is even open means you might wait on / consume a
+        token for a backend you're about to skip anyway. Is that fine, or
+        would checking the circuit first (free, no waiting) and only then
+        touching the rate limiter be better? Pick one, and be ready to
+        explain why -- this is exactly the kind of ordering question that
+        gets asked as a follow-up.
+
+          1. `await bucket.acquire()` to respect the rate limit.
+          2. Circuit check: if `breaker.allow_request()` is False, raise
+             immediately -- the circuit is OPEN and hasn't hit its
+             cooldown, so don't even attempt this backend. What should you
+             raise here so the caller (generate()) can tell "circuit was
+             open" apart from "retries were exhausted"? Your call -- a
+             plain RuntimeError with a clear message is fine, or your own
+             small exception class if you want generate() to branch on it.
+          3. Call `retry_with_backoff(lambda: backend.call(prompt), ...)`
+             wrapped in a try/except:
+               - on success: `breaker.record_success()`, then
+                 `parse_llm_json()` the raw string and return the parsed
+                 dict.
+               - on failure (retries exhausted -- RetryableAPIError or
+                 ParseFailure bubbling out of retry_with_backoff):
+                 `breaker.record_failure()`, then re-raise so generate()
+                 knows this backend is done.
+
+        One thing retry_with_backoff does NOT do: tell you how many
+        attempts it took. If generate() needs a retry count for the
+        response (see TODO 1/2 above), you'll need to track that
+        yourself -- e.g. a small counter in a closure around the lambda
+        you pass to retry_with_backoff, incremented every time it's
+        actually called, then read after retry_with_backoff returns (or
+        raises).
+        """
+
+        t0 = time.perf_counter()
+
+        await bucket.acquire()
+
+        if not breaker.allow_request():
+          raise RuntimeError("circuit open")
+        
+        circuit_state_at_attempt = breaker.state.value
+
+        attempts = 0
+
+        async def call_and_count():
+          nonlocal attempts
+          attempts += 1
+          return await backend.call(prompt)
+
+        try:
+          raw = await retry_with_backoff(call_and_count)
+          output = parse_llm_json(raw)
+          breaker.record_success()
+        except (NonRetryableAPIError, RetryableAPIError, ParseFailure):
+          breaker.record_failure()
+          raise
+
+        return AttemptResult(
+          output=output,
+          retries=attempts-1,
+          circuit_state=circuit_state_at_attempt,
+          latency_ms=(time.perf_counter() - t0) *1000,
+          cost_usd=backend.cost_per_call_usd
+        )
+
+
+
+
+
+
