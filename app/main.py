@@ -4,14 +4,13 @@ FastAPI app wiring — the public entrypoint.
 Run with:  uvicorn app.main:app --reload
 
 Endpoints:
-  POST /gateway/generate      -> the resilient gateway (app/router.py) — the part you build
-  POST /admin/degrade/{name}  -> flip a backend into "always fail" mode, for the Day 4 load test
+  POST /gateway/generate      -> the resilient gateway (app/router.py)
+  POST /admin/degrade/{name}  -> flip a backend into "always fail" mode,
+                                  for exercising failover and load tests
   POST /admin/restore/{name}  -> restore a backend to normal behavior
-  GET  /admin/status          -> current backend degradation state (+ trace summary once Day 3 is done)
-
-This file is boilerplate wiring, not TODO'd — the interesting work lives in
-resilience.py (done, minus one bug you're fixing), router.py (TODO), and
-tracing.py (TODO).
+  GET  /admin/status          -> current backend degradation state, plus
+                                  a per-backend trace summary (success
+                                  rate, latency, circuit state, cost)
 """
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -63,17 +62,11 @@ async def restore(backend_name: str):
 
 @app.get("/admin/status")
 async def status():
-    status_payload = {
+    return {
         "self_hosted_degraded": self_hosted.degraded,
         "api_provider_degraded": api_provider.degraded,
+        "trace_summary": trace_store.summary_stats(),
     }
-    # TODO (Day 3): once tracing.py's TraceStore.summary_stats() is
-    # implemented, merge it in here too — this is your "tiny dashboard."
-    try:
-        status_payload["trace_summary"] = trace_store.summary_stats()
-    except NotImplementedError:
-        pass
-    return status_payload
 
 
 def _backend_by_name(name: str) -> MockBackend:

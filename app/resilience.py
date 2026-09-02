@@ -1,15 +1,12 @@
 """
-Resilience primitives — ported from
-startup_prep/week4_sola/day21_resilient_llm_engineering/ex01_resilient_client.py.
+Resilience primitives shared by both backends: a token-bucket rate
+limiter, retry with full-jitter exponential backoff, a circuit breaker,
+and a forgiving JSON parser for model output.
 
-AsyncTokenBucket, retry_with_backoff, and parse_llm_json are copied as-is —
-you already built and validated these in Day 21, no need to redo that work.
-
-CircuitBreaker is copied too, WITH THE SAME BUG your Day 21 version has:
-record_failure() never increments failure_count (see the FIXME below). Fix
-it here before you build on top of it — the whole point of Day 4's load
-test is watching the breaker trip on cue, and it can't do that with this
-bug in place.
+These are backend-agnostic on purpose — CircuitBreaker and
+AsyncTokenBucket are instantiated once per backend in router.py rather
+than shared globally, so one backend's failures can't throttle or trip
+the circuit for the other.
 """
 import asyncio
 import json
@@ -109,14 +106,7 @@ class CircuitBreaker:
         self.state = CircuitState.CLOSED
 
     def record_failure(self):
-        # FIXME (ported bug from Day 21 — fix this before Day 2):
-        # `self.failure_count` alone is a no-op expression statement, it
-        # doesn't increment anything. As written, failure_count stays 0
-        # forever, so the CLOSED -> OPEN transition below can never fire
-        # from a run of repeated failures — the breaker can currently only
-        # open via a failed HALF_OPEN probe. It should read:
-        #     self.failure_count += 1
-        self.failure_count +=1 
+        self.failure_count += 1
         if self.state == CircuitState.HALF_OPEN:
             self.state = CircuitState.OPEN
             self.opened_at = time.monotonic()

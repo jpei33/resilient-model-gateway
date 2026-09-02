@@ -1,21 +1,17 @@
 """
-Mock model backends. You shouldn't need to modify the failure-simulation
-mechanics, but feel free to tune the knobs (error_rate, latency) once your
-gateway works and you want to stress-test different failure profiles.
+Mock model backends standing in for a real self-hosted model and a real
+API-based provider, with deliberately different profiles:
 
-Two backends, deliberately different profiles, mirroring Day 21's
-FlakyModel:
   SelfHostedBackend  — fast, cheap, occasionally overloaded (higher error rate)
   APIProviderBackend — slower, pricier, more reliable (lower error rate)
 
-Both expose the same interface your resilience layer already knows how to
-wrap: `async def call(self, prompt: str) -> str` that either returns a raw
-JSON string or raises RetryableAPIError, exactly like Day 21's FlakyModel.
+Both expose the same interface the resilience layer wraps:
+`async def call(self, prompt: str) -> str`, which either returns a raw
+JSON string or raises RetryableAPIError.
 
-`degraded`: an admin-togglable flag (see app/main.py's /admin/degrade
-route) that forces near-100% failure — this is how Day 4's load test
-simulates "the self-hosted backend goes down mid-run" without actually
-killing a process.
+`degraded` is an admin-togglable flag (see the /admin/degrade route in
+app/main.py) that forces near-100% failure — this is how the load test
+simulates a backend going down mid-run without killing a process.
 """
 import asyncio
 import json

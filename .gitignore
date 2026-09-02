@@ -6,3 +6,4 @@ venv/
 *.egg-info/
 .pytest_cache/
 .DS_Store
+scripts/load_test_output.json

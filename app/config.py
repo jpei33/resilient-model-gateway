@@ -1,7 +1,12 @@
 """
-Central place for tunables, so router.py/backends.py don't hardcode magic
-numbers. Adjust values as you tune Day 2's resilience stack — this file
-itself needs no TODOs, it's just a settings holder.
+Tunable defaults for the resilience stack (rate limit, circuit breaker,
+retry budget), collected in one place.
+
+Currently unused: router.py defines its own copies of these same defaults
+as ModelGateway constructor arguments rather than importing from here.
+Wiring them together (passing `settings` into ModelGateway at startup) is
+a natural follow-up if these values ever need to be tuned from one place
+instead of two.
 """
 from pydantic import BaseModel
 

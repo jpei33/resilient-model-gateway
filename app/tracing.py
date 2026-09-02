@@ -1,40 +1,23 @@
 """
-Observability layer — Day 3 of PLAN.md.
+Observability layer for the gateway: a GatewaySpan per backend attempt,
+and a TraceStore that collects them and rolls them up into per-backend
+summary stats.
 
-Adapt (don't just copy) the LLMSpan/Trace/TraceStore pattern from
-startup_prep/week4_sola/day16_agentic_evals/observability_tools_reading.py
-— that reading is generic (arbitrary agent traces); this gateway is
-specifically a two-backend router, so the fields that matter are
-different. Deciding what belongs on a span for THIS system is the task,
-not just porting the dataclass.
-
-TASK — GatewaySpan:
-    A starting field set is sketched below. At minimum you want: which
-    backend served the request, how many retries fired before
-    success/failure, the circuit breaker's state AT THE TIME of the
-    request (not after — that's what makes "the breaker tripped mid-run"
-    visible in a chart later), latency, success/failure, and a cost
-    estimate (MockBackend.cost_per_call_usd, times retries+1 if you want
-    retries to show up in the cost signal too). Add/remove fields as you
-    see fit.
-
-TASK — TraceStore.record(span):
-    Append a span to self.spans.
-
-TASK — TraceStore.summary_stats() -> dict:
-    This is Day 3's "tiny dashboard" — a rolling summary, not a UI. At
-    minimum, return per-backend: success rate, p50/p95 latency, current
-    circuit state, and total cost. This is what Day 4's load test will
-    call periodically (or at the end) to produce the before/during/after
-    picture of the failover event — design it with that chart in mind.
+GatewaySpan captures what matters for a two-backend router specifically:
+which backend served the request, how many retries fired before
+success/failure, the circuit breaker's state AT THE TIME of the request
+(captured before the call, not read live afterward — that's what makes a
+mid-run circuit trip visible in a chart rather than washed out by the time
+the response comes back), latency, success/failure, and a per-call cost
+estimate.
 """
 from dataclasses import dataclass
 from typing import Any, Dict, List
+from collections import defaultdict
 
 
 @dataclass
 class GatewaySpan:
-    # Starting point — adjust freely, see the docstring above.
     trace_id: str
     backend: str
     success: bool
@@ -51,7 +34,31 @@ class TraceStore:
         self.spans: List[GatewaySpan] = []
 
     def record(self, span: GatewaySpan) -> None:
-        raise NotImplementedError("TODO: Day 3 task — see module docstring")
+        self.spans.append(span)
 
     def summary_stats(self) -> Dict[str, Any]:
-        raise NotImplementedError("TODO: Day 3 task — see module docstring for the minimum shape")
+        """
+        Per-backend rollup: success rate, p50/p95 latency, total cost, and
+        request count. `circuit_state` here is the state recorded on the
+        most recent span for that backend — a snapshot as of the last
+        request, not a live read of the breaker.
+        """
+        by_backend: Dict[str, List[GatewaySpan]] = defaultdict(list)
+        for span in self.spans:
+            by_backend[span.backend].append(span)
+
+        stats: Dict[str, Any] = {}
+
+        for backend, spans in by_backend.items():
+            latencies = sorted(s.latency_ms for s in spans)
+            n = len(latencies)
+            stats[backend] = {
+                "success_rate": sum(s.success for s in spans)/n,
+                "p50_latency_ms": latencies[n//2],
+                "p95_latency_ms": latencies[n*95//100],
+                "circuit_state": spans[-1].circuit_state,
+                "total_cost_usd": sum(s.cost_usd for s in spans),
+                "request_count": n
+
+            }
+        return stats
