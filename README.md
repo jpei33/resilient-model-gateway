@@ -18,7 +18,9 @@ See [`docs/architecture.md`](docs/architecture.md) for the full request-flow
 diagram (Mermaid, with a text fallback) and the design notes behind it —
 including why the rate limiter/circuit breaker/retry stack is duplicated
 per backend rather than shared, and a couple of tracing gaps worth knowing
-about going in.
+about going in. Prefer a rendered picture over reading Mermaid source?
+[`docs/architecture.html`](docs/architecture.html) has the same diagram
+pre-rendered as an image, alongside the same design notes.
 
 Two mock backends behind a FastAPI service, each independently rate-limited
 and circuit-broken. The gateway tries the primary first; on a retried-out

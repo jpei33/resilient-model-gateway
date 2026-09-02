@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Architecture — Resilient Model Gateway</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 900px;
+    margin: 2rem auto;
+    padding: 0 1.5rem;
+    color: #1a1a1a;
+    line-height: 1.5;
+  }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.2rem; margin-top: 2.5rem; border-bottom: 1px solid #ddd; padding-bottom: 0.3rem; }
+  img {
+    max-width: 100%;
+    height: auto;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    display: block;
+    margin: 1.5rem 0;
+  }
+  code { background: #f2f2f2; padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.9em; }
+  ul { padding-left: 1.3rem; }
+  li { margin-bottom: 0.6rem; }
+  a { color: #0969da; }
+  .back { font-size: 0.9rem; }
+</style>
+</head>
+<body>
+
+<p class="back"><a href="../README.md">&larr; back to README</a></p>
+
+<h1>Architecture</h1>
+
+<p>
+  Request flow through <code>ModelGateway.generate()</code>: rate limit &rarr;
+  circuit check &rarr; retry-with-backoff &rarr; parse, tried against
+  <code>primary</code> first and falling back to <code>fallback</code> on
+  exhausted retries or an open circuit. Every attempt on either backend is
+  recorded as a <code>GatewaySpan</code>, rolled up by <code>TraceStore</code>
+  and exposed at <code>GET /admin/status</code>.
+</p>
+
+<img src="architecture_diagram.png" alt="Resilient Model Gateway request-flow diagram">
+
+<p>
+  Rendered from the Mermaid source in
+  <a href="architecture.md"><code>docs/architecture.md</code></a>, which also
+  has a plain-text fallback of the same flow.
+</p>
+
+<h2>Key design points</h2>
+<ul>
+  <li>
+    <strong>Per-backend isolation, not shared:</strong>
+    <code>primary_bucket</code>/<code>fallback_bucket</code> and
+    <code>primary_breaker</code>/<code>fallback_breaker</code> are two
+    completely independent pairs. If they were shared/global, a tripped
+    primary breaker would also block the "healthy" fallback, defeating the
+    entire point of having one.
+  </li>
+  <li>
+    <strong><code>circuit_state</code> is captured at request time, not read
+    fresh later:</strong> each <code>GatewaySpan</code> records the breaker's
+    state <em>before</em> that attempt ran, not after. That's what makes
+    "this specific request is the one that tripped the breaker"
+    reconstructable after the fact &mdash; read it live instead and you'd
+    never see the moment of the trip, only its aftermath.
+  </li>
+  <li>
+    <strong>Known gap &mdash; circuit-open skips are invisible to
+    tracing:</strong> when <code>allow_request()</code> returns
+    <code>False</code>, <code>_attempt_backend</code> raises immediately,
+    before any <code>GatewaySpan</code> is built. So <code>TraceStore</code>'s
+    <code>request_count</code> for a backend only reflects attempts that were
+    actually tried, not every request that was <em>routed toward</em> it
+    &mdash; once a breaker opens, further requests to that backend leave no
+    trace at all, and <code>/admin/status</code>'s <code>circuit_state</code>
+    for it goes stale (frozen at whatever the last real attempt recorded)
+    until a HALF_OPEN probe eventually runs and gets recorded.
+  </li>
+  <li>
+    <strong>Retries can mask failures from the breaker:</strong>
+    <code>failure_threshold</code> counts failures at the
+    <code>_attempt_backend</code> level (after all 5 raw retries are
+    exhausted), not raw per-call failures. A backend has to fail all 5
+    retries, 5 times <em>in a row</em>, before its breaker opens &mdash; so
+    even a backend that's 95% broken can keep the breaker CLOSED indefinitely
+    if occasional retry-recovered successes keep resetting
+    <code>failure_count</code> to 0.
+  </li>
+</ul>
+
+</body>
+</html>
