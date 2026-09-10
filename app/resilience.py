@@ -97,15 +97,36 @@ class CircuitBreaker:
         if self.state == CircuitState.OPEN:
             if time.monotonic() - self.opened_at >= self.cooldown_seconds:
                 self.state = CircuitState.HALF_OPEN
-                return True
+                return True  # this caller becomes THE probe
             return False
-        return True  # HALF_OPEN: allow the probe through
+        # HALF_OPEN: a probe is already in flight (the caller that made the
+        # OPEN -> HALF_OPEN transition above). Reject everyone else until it
+        # resolves via record_success/record_failure, which moves the state
+        # away from HALF_OPEN. Previously this unconditionally returned True,
+        # so every concurrent caller was let through as its own "probe" —
+        # not a single controlled probe at all under real concurrency.
+        return False
 
     def record_success(self):
+        if self.state == CircuitState.OPEN:
+            # A request admitted earlier while CLOSED can finish (via retry)
+            # after a *different* concurrent request has since tripped the
+            # breaker to OPEN. That's a stale signal from before the trip —
+            # it must not be allowed to silently re-close a breaker that
+            # legitimately just opened. Only a deliberate HALF_OPEN probe
+            # (below) is allowed to close the circuit.
+            return
         self.failure_count = 0
         self.state = CircuitState.CLOSED
 
     def record_failure(self):
+        if self.state == CircuitState.OPEN:
+            # Same staleness issue as record_success: a late failure from a
+            # request admitted before the trip shouldn't push opened_at
+            # forward again, or the cooldown could be extended indefinitely
+            # by a trickle of late failures from requests admitted before
+            # the breaker opened.
+            return
         self.failure_count += 1
         if self.state == CircuitState.HALF_OPEN:
             self.state = CircuitState.OPEN

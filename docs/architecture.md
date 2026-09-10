@@ -119,9 +119,28 @@ Meanwhile, independently at any time:
   that backend leave no trace at all, and `/admin/status`'s `circuit_state`
   for it goes stale (frozen at whatever the last real attempt recorded)
   until a HALF_OPEN probe eventually runs and gets recorded.
-- **Retries can mask failures from the breaker:** `failure_threshold` counts
-  failures at the `_attempt_backend` level (after all 5 raw retries are
-  exhausted), not raw per-call failures. A backend has to fail all 5 retries,
-  5 times *in a row*, before its breaker opens — so even a backend that's
-  95% broken can keep the breaker CLOSED indefinitely if occasional
-  retry-recovered successes keep resetting `failure_count` to 0.
+- **Retries can mask failures from the breaker — but only per request,
+  not under real concurrency:** `failure_threshold` counts failures at the
+  `_attempt_backend` level (after all 5 raw retries are exhausted), so any
+  *one* request against a 95%-degraded backend has only a ~78% chance of
+  exhausting all 5 retries. Sequentially, that argues the breaker could
+  stay CLOSED indefinitely. It doesn't hold up under load: at concurrency
+  10, multiple requests fail out close enough together that the breaker
+  trips reliably (verified: 10/10 load-test runs tripped it, 1-5 times
+  per run). The "retries mask failures" effect is real, it just isn't the
+  whole story once more than one request is in flight at a time.
+- **The breaker wasn't safe under concurrent access (fixed):**
+  `allow_request()` let *every* concurrent caller through once state was
+  HALF_OPEN, not just one probe, and `record_success()`/`record_failure()`
+  unconditionally overwrote `state` with no check on whether it was still
+  the state the caller had originally observed. Verified directly: in
+  most load-test runs, `record_success` transitioned the breaker straight
+  `OPEN -> CLOSED`, bypassing HALF_OPEN — a request admitted while CLOSED,
+  finishing late (after its own retries) after a *different* concurrent
+  request had already tripped the breaker, clobbering the legitimate
+  reopen. Fixed in `app/resilience.py` lines 94-127:
+  `record_success`/`record_failure` now no-op when the breaker is already
+  OPEN, and `allow_request` admits exactly one caller as the HALF_OPEN
+  probe, rejecting the rest until it resolves. Reran the load test 5x
+  post-fix: zero bypasses, every cycle goes cooldown -> single probe ->
+  resolve cleanly.

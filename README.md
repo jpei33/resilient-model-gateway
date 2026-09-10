@@ -99,15 +99,43 @@ polls `/admin/status` throughout — writing everything to
   silently swallowed again, this time by a test script's own
   `except Exception: pass`. A broad except in your own test harness can
   hide the exact bug you're trying to surface.
-- Once the load test was running end to end, the most interesting finding
-  wasn't a bug at all: with `self_hosted` degraded to a 95% raw error rate,
-  its circuit breaker never tripped during the whole run. `retry_with_backoff`
-  gives every attempt up to 5 raw tries before it counts as one failure
-  against `failure_threshold=5` — so roughly 22% of individual requests
-  still succeed via retries even while "95% broken," and each such success
-  resets `failure_count` back to 0. Retries and circuit breakers can work
-  against each other: the retry layer's whole job is exactly what kept the
-  breaker blind here.
+- Once the load test was running end to end, I initially assumed (and wrote
+  down) that the breaker never tripped, on the reasoning that
+  `retry_with_backoff` gives every attempt up to 5 raw tries before it
+  counts as one failure — so roughly 22% of individual requests still
+  succeed via retries even while "95% broken," resetting `failure_count`
+  back to 0 before a streak of 5 could accumulate. **That reasoning only
+  holds for one request at a time.** Re-running the same load test and
+  instrumenting the breaker's actual state transitions directly (not just
+  reading `/admin/status`, which is exactly the stale signal described
+  above) showed the breaker tripping every run — 1 to 5 times per
+  200-request run across 10 runs, never zero. At concurrency 10, several
+  requests hit a 95%-degraded backend close enough together in time that
+  their retry-exhaustion failures land back-to-back regardless of any one
+  request's own retry-recovery odds; the 22% figure describes a single
+  sequential request, not what 10 of them do at once.
+- That same direct instrumentation caught something the retries-mask-it
+  story would never have surfaced: in most runs, `record_success()`
+  transitioned the breaker straight from OPEN to CLOSED, skipping
+  HALF_OPEN entirely — the true sequence, on inspection, was a request
+  admitted while CLOSED that finished late (after its own retries) and
+  reported success *after* a different concurrent request had already
+  tripped the breaker to OPEN. `record_success()`/`record_failure()` had
+  no concept of "this signal might be stale relative to the breaker's
+  current state" — they just overwrote it. Separately,
+  `CircuitBreaker.allow_request()` also didn't gate `HALF_OPEN` to a
+  single probe — every concurrent caller was let through once the
+  cooldown elapsed, not just one. **Fixed both** in `app/resilience.py`
+  (`CircuitBreaker.allow_request`/`record_success`/`record_failure`,
+  lines 94-127): `record_success`/`record_failure` now no-op if the
+  breaker is already OPEN (a stale signal from before the trip can't
+  override it), and `allow_request` only returns `True` from `HALF_OPEN`
+  on the single call that makes the `OPEN -> HALF_OPEN` transition —
+  every other concurrent caller is rejected until that probe resolves.
+  Verified: reran the same load test 5 times post-fix — every OPEN cycle
+  now goes cleanly through cooldown -> one HALF_OPEN probe -> resolve,
+  zero stale-state bypasses, vs. the race showing up in most pre-fix
+  runs. `docs/failover_chart.png` is from a post-fix run.
 
 **What I'd add with more time:**
 
