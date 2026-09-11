@@ -133,6 +133,18 @@ class ModelGateway:
         await bucket.acquire()
 
         if not breaker.allow_request():
+          self.trace_store.record(GatewaySpan(
+            trace_id=trace_id,
+            backend=backend.name,
+            success=False,
+            skipped=True,
+            latency_ms=(time.perf_counter() - t0)*1000,
+            retries=0,
+            circuit_state=breaker.state.value,
+            timestamp=time.time(),
+            cost_usd=0.0,
+            error="circuit_open",
+          ))
           raise RuntimeError("circuit open")
 
         circuit_state_at_attempt = breaker.state.value

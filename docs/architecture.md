@@ -111,14 +111,20 @@ Meanwhile, independently at any time:
   after. That's what makes "this specific request is the one that tripped the
   breaker" reconstructable after the fact — read it live instead and you'd
   never see the moment of the trip, only its aftermath.
-- **Known gap — circuit-open skips are invisible to tracing:** when
-  `allow_request()` returns `False`, `_attempt_backend` raises immediately,
-  before any `GatewaySpan` is built. So `TraceStore`'s `request_count` for a
-  backend only reflects attempts that were actually tried, not every request
-  that was *routed toward* it — once a breaker opens, further requests to
-  that backend leave no trace at all, and `/admin/status`'s `circuit_state`
-  for it goes stale (frozen at whatever the last real attempt recorded)
-  until a HALF_OPEN probe eventually runs and gets recorded.
+- **Circuit-open skips are now logged too (fixed):** `allow_request()`
+  returning `False` used to make `_attempt_backend` raise immediately with
+  no `GatewaySpan` recorded, so `request_count` only reflected attempts
+  actually tried and `/admin/status`'s `circuit_state` went stale (frozen
+  at whatever the last real attempt recorded) for as long as the breaker
+  stayed open. Fixed: a skip now records a `GatewaySpan(skipped=True, ...)`
+  before raising, so `circuit_state` updates live even while requests are
+  being rejected, `request_count` covers every request actually routed
+  toward the backend, and a new `circuit_open_skips` count makes the
+  rejected volume explicit. Verified: `/admin/status`, polled every 0.25s
+  through a real run, now shows `closed`, `open`, *and* `half_open` — not
+  just `closed` the whole time. Latency percentiles are still computed
+  only over attempted calls, not skips, so a flood of instant rejections
+  doesn't artificially make the backend look fast.
 - **Retries can mask failures from the breaker — but only per request,
   not under real concurrency:** `failure_threshold` counts failures at the
   `_attempt_backend` level (after all 5 raw retries are exhausted), so any

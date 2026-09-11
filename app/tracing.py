@@ -27,6 +27,8 @@ class GatewaySpan:
     timestamp: float
     cost_usd: float = 0.0
     error: str = ""
+    skipped: bool = False  # True for a circuit-open rejection: no backend
+                            # call was ever made, so latency/retries are 0.
 
 
 class TraceStore:
@@ -50,15 +52,17 @@ class TraceStore:
         stats: Dict[str, Any] = {}
 
         for backend, spans in by_backend.items():
-            latencies = sorted(s.latency_ms for s in spans)
+            attempted = [s for s in spans if not s.skipped]
+            skipped = [s for s in spans if s.skipped]
+            latencies = sorted(s.latency_ms for s in attempted) or [0.0]
             n = len(latencies)
             stats[backend] = {
-                "success_rate": sum(s.success for s in spans)/n,
+                "success_rate": sum(s.success for s in spans)/len(spans),
                 "p50_latency_ms": latencies[n//2],
                 "p95_latency_ms": latencies[n*95//100],
                 "circuit_state": spans[-1].circuit_state,
                 "total_cost_usd": sum(s.cost_usd for s in spans),
-                "request_count": n
-
+                "request_count": len(spans),
+                "circuit_open_skips": len(skipped),
             }
         return stats
