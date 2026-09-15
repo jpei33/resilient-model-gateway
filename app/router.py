@@ -114,13 +114,14 @@ class ModelGateway:
         circuit-check -> retry -> parse. Called from generate() once for
         the primary, once for the fallback.
 
-        Rate-limiting runs before the circuit check, ahead of knowing
-        whether the circuit is even open. The alternative — circuit check
-        first, rate limiter only if that passes — avoids consuming a token
-        for a backend that's about to be skipped anyway; this ordering
-        instead keeps the two checks independent of each other, at the
-        cost of occasionally waiting on a token for a backend that turns
-        out to be circuit-open. Either is defensible.
+        Circuit check runs before rate-limiting. allow_request() is a
+        cheap, non-blocking in-memory read, while bucket.acquire() can
+        block (it sleeps until a token frees up) and then permanently
+        consumes one. Checking the circuit first means a request to an
+        already-open backend fails fast for free, instead of paying a
+        real wait and burning a token on a call that was going to be
+        rejected anyway. There's no offsetting downside: behavior for a
+        closed circuit is unchanged either way.
 
         `retry_with_backoff` doesn't report how many attempts it took, so
         `call_and_count()` wraps the backend call in a closure counter
@@ -130,8 +131,8 @@ class ModelGateway:
 
         t0 = time.perf_counter()
 
-        await bucket.acquire()
-
+        # check circuit breaker first: cheap, non-blocking, and lets a
+        # doomed request fail fast without touching the rate limiter
         if not breaker.allow_request():
           self.trace_store.record(GatewaySpan(
             trace_id=trace_id,
@@ -146,6 +147,10 @@ class ModelGateway:
             error="circuit_open",
           ))
           raise RuntimeError("circuit open")
+
+        # only spend rate-limit budget on requests that can actually reach
+        # the backend
+        await bucket.acquire()
 
         circuit_state_at_attempt = breaker.state.value
 
